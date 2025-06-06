@@ -1,0 +1,132 @@
+name: Auto Setup Claude Code
+
+# このワークフローは新規リポジトリでClaude Codeを自動セットアップします
+# リポジトリ作成時やプッシュ時に自動実行されます
+
+on:
+  # 新規リポジトリ作成時
+  create:
+  # 初回プッシュ時
+  push:
+    branches: [ main, master ]
+    paths:
+      - .github/workflows/auto-setup-claude.yml
+
+jobs:
+  auto-setup:
+    runs-on: ubuntu-latest
+    # 既存のワークフローがない場合のみ実行
+    if: github.event_name == 'create' || github.event_name == 'push'
+    permissions:
+      contents: write
+      actions: write
+      id-token: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Check if Claude Code already exists
+        id: check-claude
+        run: |
+          if [ -f .github/workflows/claude.yml ] || [ -f .github/workflows/claude.yaml ]; then
+            echo "claude_exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "claude_exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Auto Setup Claude Code (OAuth)
+        if: steps.check-claude.outputs.claude_exists == 'false'
+        uses: Akira-Papa/claude-code-action@beta
+        with:
+          auto_setup_claude: "true"
+          use_oauth: "true"
+          # OAuth認証を使用する場合は、以下のシークレットを設定してください
+          claude_access_token: ${{ secrets.CLAUDE_ACCESS_TOKEN }}
+          claude_refresh_token: ${{ secrets.CLAUDE_REFRESH_TOKEN }}
+          claude_expires_at: ${{ secrets.CLAUDE_EXPIRES_AT }}
+
+          # オプション設定
+          custom_instructions: |
+            あなたはこのプロジェクトの開発をサポートするアシスタントです。
+            コードレビューや実装サポートを行ってください。
+          allowed_tools: "mcp__github__add_pull_request_review_comment"
+          model: "claude-3-5-sonnet-20241022"
+
+      - name: Auto Setup Claude Code (API Key) - Alternative
+        if: steps.check-claude.outputs.claude_exists == 'false' && !secrets.CLAUDE_ACCESS_TOKEN
+        uses: Akira-Papa/claude-code-action@beta
+        with:
+          auto_setup_claude: "true"
+          use_oauth: "false"
+          # API Key認証を使用する場合
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+
+          # オプション設定
+          custom_instructions: |
+            あなたはこのプロジェクトの開発をサポートするアシスタントです。
+            コードレビューや実装サポートを行ってください。
+          allowed_tools: "mcp__github__add_pull_request_review_comment"
+          model: "claude-3-5-sonnet-20241022"
+
+      - name: Commit Auto-generated workflow
+        if: steps.check-claude.outputs.claude_exists == 'false'
+        run: |
+          git config --local user.email "claude-auto-setup@users.noreply.github.com"
+          git config --local user.name "Claude Auto Setup"
+
+          if [ -f .github/workflows/claude.yml ]; then
+            git add .github/workflows/claude.yml
+            git commit -m "feat: Add Claude Code workflow (auto-generated)" || exit 0
+            git push
+          fi
+
+      - name: Create setup completion issue
+        if: steps.check-claude.outputs.claude_exists == 'false'
+        uses: actions/github-script@v7
+                 with:
+           script: |
+             const { data: issue } = await github.rest.issues.create({
+               owner: context.repo.owner,
+               repo: context.repo.repo,
+               title: '🤖 Claude Code Auto-Setup Completed',
+               body: `## Claude Code has been automatically set up! 🎉
+
+             ### What was configured:
+             - ✅ GitHub Actions workflow created
+             - ✅ OAuth authentication configured (if secrets are available)
+             - ✅ Auto-refresh token functionality enabled
+
+             ### Next steps:
+             1. Configure repository secrets if not already done:
+                - CLAUDE_ACCESS_TOKEN
+                - CLAUDE_REFRESH_TOKEN
+                - CLAUDE_EXPIRES_AT
+
+             2. Test Claude by commenting @claude Hello! on any issue or PR
+
+             ### OAuth Token Management:
+             - 🔄 **Automatic Refresh**: Tokens will be automatically refreshed when they expire
+             - 🔐 **Secure Storage**: Refreshed tokens are automatically updated in repository secrets
+             - ⚡ **Real-time Updates**: No manual intervention required for token expiration
+
+             ### Getting OAuth Credentials:
+             If you need to set up OAuth credentials:
+             1. Login to Claude with your Max subscription: /login
+             2. Find credentials in ~/.claude/.credentials.json
+             3. Add them as repository secrets
+
+             ### Alternative: API Key Setup:
+             If you prefer API key authentication:
+             1. Get your API key from https://console.anthropic.com/
+             2. Add it as ANTHROPIC_API_KEY repository secret
+             3. The workflow will automatically use API key if OAuth tokens are not available
+
+             ---
+             Generated by Claude Code Auto-Setup`,
+               labels: ['claude-code', 'auto-setup', 'documentation']
+             });
+
+             console.log('Created setup completion issue:', issue.html_url);

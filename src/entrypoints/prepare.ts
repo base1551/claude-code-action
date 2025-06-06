@@ -18,15 +18,43 @@ import { createPrompt } from "../create-prompt";
 import { createOctokit } from "../github/api/client";
 import { fetchGitHubData } from "../github/data/fetcher";
 import { parseGitHubContext } from "../github/context";
+import { handleOAuthTokenRefresh } from "../oauth/token-refresh";
+import { autoSetupClaudeCode } from "../setup/auto-setup";
 
 async function run() {
   try {
-    // Step 1: Setup GitHub token
+    // Step 1: Handle OAuth token refresh if needed
+    await handleOAuthTokenRefresh();
+
+    // Step 2: Setup GitHub token
     const githubToken = await setupGitHubToken();
     const octokit = createOctokit(githubToken);
 
     // Step 2: Parse GitHub context (once for all operations)
     const context = parseGitHubContext();
+
+    // Step 2.5: Auto-setup Claude Code if this is the first run
+    if (process.env.AUTO_SETUP_CLAUDE === "true") {
+      try {
+        const autoSetupResult = await autoSetupClaudeCode({
+          githubToken,
+          owner: context.repository.owner,
+          repo: context.repository.repo,
+          useOAuth: process.env.USE_OAUTH === "true",
+          customInstructions: process.env.CUSTOM_INSTRUCTIONS,
+          allowedTools: process.env.ALLOWED_TOOLS,
+          model: process.env.MODEL,
+        });
+
+        if (autoSetupResult.success) {
+          console.log("🚀 Auto-setup completed:", autoSetupResult.message);
+        } else {
+          console.warn("⚠️ Auto-setup failed:", autoSetupResult.message);
+        }
+      } catch (error) {
+        console.warn("⚠️ Auto-setup encountered an error:", error);
+      }
+    }
 
     // Step 3: Check write permissions
     const hasWritePermissions = await checkWritePermissions(

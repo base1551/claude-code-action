@@ -69,6 +69,11 @@ inputs:
     required: false
     default: ""
 
+  auto_setup_claude:
+    description: "Automatically setup Claude Code workflow for new repositories"
+    required: false
+    default: "false"
+
   timeout_minutes:
     description: "Timeout in minutes for execution"
     required: false
@@ -78,6 +83,15 @@ outputs:
   execution_file:
     description: "Path to the Claude Code execution output file"
     value: ${{ steps.claude-code.outputs.execution_file }}
+  refreshed_access_token:
+    description: "Refreshed Claude OAuth access token (if applicable)"
+    value: ${{ steps.prepare.outputs.claude_access_token }}
+  refreshed_refresh_token:
+    description: "Refreshed Claude OAuth refresh token (if applicable)"
+    value: ${{ steps.prepare.outputs.claude_refresh_token }}
+  refreshed_expires_at:
+    description: "Refreshed Claude OAuth token expiration timestamp (if applicable)"
+    value: ${{ steps.prepare.outputs.claude_expires_at }}
 
 runs:
   using: "composite"
@@ -106,6 +120,16 @@ runs:
         DIRECT_PROMPT: ${{ inputs.direct_prompt }}
         OVERRIDE_GITHUB_TOKEN: ${{ inputs.github_token }}
         GITHUB_RUN_ID: ${{ github.run_id }}
+
+        # OAuth settings for auto-refresh
+        USE_OAUTH: ${{ inputs.use_oauth }}
+        CLAUDE_ACCESS_TOKEN: ${{ inputs.claude_access_token }}
+        CLAUDE_REFRESH_TOKEN: ${{ inputs.claude_refresh_token }}
+        CLAUDE_EXPIRES_AT: ${{ inputs.claude_expires_at }}
+
+        # Auto-setup settings
+        AUTO_SETUP_CLAUDE: ${{ inputs.auto_setup_claude }}
+        MODEL: ${{ inputs.model || inputs.anthropic_model }}
 
     - name: Run Claude Code
       id: claude-code
