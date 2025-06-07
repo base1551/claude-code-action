@@ -18,12 +18,100 @@ import { createPrompt } from "../create-prompt";
 import { createOctokit } from "../github/api/client";
 import { fetchGitHubData } from "../github/data/fetcher";
 import { parseGitHubContext } from "../github/context";
+import { OAuthTokenRefresher, getTokensFromEnvironment } from "../oauth/token-refresh";
+import { AuditLogger, DEFAULT_SECURITY_CONFIG } from "../oauth/security-utils";
+
+/**
+ * OAuth トークンのリフレッシュが必要かチェックし、必要であれば実行
+ */
+async function performOAuthRefreshIfNeeded(githubToken: string, auditLogger: AuditLogger, forceRefresh: boolean = false): Promise<void> {
+  try {
+    const currentTokens = getTokensFromEnvironment();
+
+    if (!currentTokens) {
+      console.log('ℹ️ OAuth トークンが設定されていません。API Key認証を使用します。');
+      return;
+    }
+
+    const repository = process.env.GITHUB_REPOSITORY;
+    if (!repository) {
+      console.warn('⚠️ GITHUB_REPOSITORY が設定されていません');
+      return;
+    }
+
+    const [owner, repo] = repository.split('/');
+    const refresher = new OAuthTokenRefresher(githubToken, owner, repo);
+
+    if (forceRefresh) {
+      auditLogger.log('scheduled_oauth_refresh', {
+        repository: repository,
+        expires_at: currentTokens.expires_at,
+      }, true);
+    } else {
+      auditLogger.log('oauth_refresh_check', {
+        repository: repository,
+        expires_at: currentTokens.expires_at,
+      }, true);
+    }
+
+    const result = await refresher.performAutoRefresh(currentTokens, forceRefresh);
+
+    if (!result.success) {
+      auditLogger.log('oauth_refresh_failed', {
+        repository: repository,
+        error: result.error,
+      }, false, result.error);
+      if (forceRefresh) {
+        console.error('❌ スケジュールされたOAuth トークンリフレッシュに失敗しました');
+        throw new Error(`Scheduled OAuth refresh failed: ${result.error}`);
+      } else {
+        console.warn('⚠️ OAuth トークンリフレッシュに失敗しましたが、既存のトークンで継続します');
+      }
+      return;
+    }
+
+    if (result.refreshed) {
+      auditLogger.log('oauth_refresh_success', {
+        repository: repository,
+        new_expires_at: result.tokens?.expires_at,
+      }, true);
+      if (forceRefresh) {
+        console.log('✅ スケジュールされたOAuth トークンリフレッシュが完了しました');
+      } else {
+        console.log('✅ OAuth トークンが自動的にリフレッシュされました');
+      }
+
+      // 新しいトークンを環境変数に設定（このプロセス内で使用するため）
+      if (result.tokens) {
+        process.env.CLAUDE_ACCESS_TOKEN = result.tokens.access_token;
+        process.env.CLAUDE_REFRESH_TOKEN = result.tokens.refresh_token;
+        process.env.CLAUDE_EXPIRES_AT = result.tokens.expires_at;
+      }
+    } else {
+      console.log('✅ OAuth トークンはまだ有効です');
+    }
+  } catch (error) {
+    auditLogger.log('oauth_refresh_error', {
+      error: error instanceof Error ? error.message : 'Unknown error',
+    }, false, error instanceof Error ? error.message : undefined);
+    if (forceRefresh) {
+      console.error('❌ スケジュールされたOAuth トークンリフレッシュでエラーが発生:', error);
+      throw error;
+    } else {
+      console.warn('⚠️ OAuth トークンチェック中にエラーが発生:', error);
+    }
+  }
+}
 
 async function run() {
   try {
     // Step 1: Setup GitHub token
     const githubToken = await setupGitHubToken();
     const octokit = createOctokit(githubToken);
+
+    // Step 1.5: OAuth Token Auto-Refresh (if OAuth is being used)
+    const auditLogger = new AuditLogger(DEFAULT_SECURITY_CONFIG.audit.maxLogs);
+    await performOAuthRefreshIfNeeded(githubToken, auditLogger);
 
     // Step 2: Parse GitHub context (once for all operations)
     const context = parseGitHubContext();
@@ -39,7 +127,18 @@ async function run() {
       );
     }
 
-    // Step 4: Check trigger conditions
+    // Step 4: Check for scheduled OAuth refresh trigger
+    const directPrompt = process.env.DIRECT_PROMPT;
+    const isScheduledOAuthRefresh = directPrompt === "__SCHEDULED_OAUTH_REFRESH__";
+
+    if (isScheduledOAuthRefresh) {
+      console.log("🔄 スケジュールされたOAuthリフレッシュを実行中...");
+      await performOAuthRefreshIfNeeded(githubToken, auditLogger, true);
+      console.log("✅ スケジュールされたOAuthリフレッシュが完了しました");
+      return;
+    }
+
+    // Step 5: Check trigger conditions
     const containsTrigger = await checkTriggerAction(context);
 
     if (!containsTrigger) {
@@ -47,13 +146,13 @@ async function run() {
       return;
     }
 
-    // Step 5: Check if actor is human
+    // Step 6: Check if actor is human
     await checkHumanActor(octokit.rest, context);
 
-    // Step 6: Create initial tracking comment
+    // Step 7: Create initial tracking comment
     const commentId = await createInitialComment(octokit.rest, context);
 
-    // Step 7: Fetch GitHub data (once for both branch setup and prompt creation)
+    // Step 8: Fetch GitHub data (once for both branch setup and prompt creation)
     const githubData = await fetchGitHubData({
       octokits: octokit,
       repository: `${context.repository.owner}/${context.repository.repo}`,
@@ -61,10 +160,10 @@ async function run() {
       isPR: context.isPR,
     });
 
-    // Step 8: Setup branch
+    // Step 9: Setup branch
     const branchInfo = await setupBranch(octokit, githubData, context);
 
-    // Step 9: Update initial comment with branch link (only for issues that created a new branch)
+    // Step 10: Update initial comment with branch link (only for issues that created a new branch)
     if (branchInfo.claudeBranch) {
       await updateTrackingComment(
         octokit,
@@ -74,7 +173,7 @@ async function run() {
       );
     }
 
-    // Step 10: Create prompt file
+    // Step 11: Create prompt file
     await createPrompt(
       commentId,
       branchInfo.defaultBranch,
@@ -83,7 +182,7 @@ async function run() {
       context,
     );
 
-    // Step 11: Get MCP configuration
+    // Step 12: Get MCP configuration
     const mcpConfig = await prepareMcpConfig(
       githubToken,
       context.repository.owner,

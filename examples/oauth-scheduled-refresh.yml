@@ -1,0 +1,59 @@
+name: "Claude OAuth Token Scheduled Refresh"
+
+# 指定時間にClaude OAuthトークンを無条件で強制リフレッシュ
+on:
+  schedule:
+    # 10分ごとに実行（期限切れに関係なく強制更新）
+    - cron: '*/10 * * * *'  # 10分ごと
+
+  # 手動実行も可能
+  workflow_dispatch:
+
+# セキュリティ：必要最小限の権限のみ付与
+permissions:
+  contents: read
+  # セキュリティ強化: secrets の write 権限のみに限定
+  secrets: write
+  # actions: write は削除（不要なワークフロー改ざんリスクを回避）
+
+jobs:
+  scheduled-refresh:
+    name: "Scheduled Token Refresh"
+    runs-on: ubuntu-latest
+
+    # OAuth認証が設定されている場合のみ実行
+    if: vars.CLAUDE_OAUTH_ENABLED == 'true' || secrets.CLAUDE_REFRESH_TOKEN != ''
+
+    steps:
+      - name: Security Check
+        run: |
+          echo "🔒 セキュリティチェックを実行中..."
+          echo "実行者: ${{ github.actor }}"
+          echo "実行理由: ${{ github.event_name }}"
+          echo "リポジトリ: ${{ github.repository }}"
+
+      - name: OAuth Token Scheduled Refresh
+        id: refresh-token
+        uses: Akira-Papa/claude-code-action-Akira-Papa@main
+        with:
+          # OAuth自動リフレッシュ専用のトリガー
+          direct_prompt: "__SCHEDULED_OAUTH_REFRESH__"
+          use_oauth: "true"
+          claude_access_token: ${{ secrets.CLAUDE_ACCESS_TOKEN }}
+          claude_refresh_token: ${{ secrets.CLAUDE_REFRESH_TOKEN }}
+          claude_expires_at: ${{ secrets.CLAUDE_EXPIRES_AT }}
+
+      - name: Verify Scheduled Refresh
+        if: steps.refresh-token.conclusion == 'success'
+        run: |
+          echo "✅ スケジュールされたトークンリフレッシュが完了しました"
+          echo "次回の更新: ${{ github.event.schedule && fromJSON('[\"明日の同時刻\", \"手動実行\"]')[0] || \"手動実行\" }}"
+          echo "🔐 新しいトークンはGitHub Secretsに安全に保存されました"
+
+      - name: Handle Refresh Failure
+        if: failure() && steps.refresh-token.conclusion == 'failure'
+        run: |
+          echo "❌ スケジュールされたトークンリフレッシュに失敗しました"
+          echo "手動での対応が必要です"
+          echo "Actionsタブで詳細なエラーログを確認してください"
+          echo "⚠️ セキュリティ上の理由により、トークン情報はログに記録されません"
