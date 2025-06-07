@@ -1,5 +1,6 @@
 import { Octokit } from '@octokit/rest';
 import crypto from 'crypto';
+import { claudeApiRequest, CloudflareBlockError } from './cloudflare-bypass.js';
 
 interface TokenRefreshResult {
   success: boolean;
@@ -50,28 +51,14 @@ export class OAuthTokenRefresher {
     try {
       console.log('🔄 Claude AI トークンのリフレッシュを開始...');
 
-      const response = await fetch('https://claude.ai/api/auth/oauth/token', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'User-Agent': 'Claude-GitHub-Action/1.0',
-        },
-        body: JSON.stringify({
-          grant_type: 'refresh_token',
-          refresh_token: refreshToken,
-        }),
+      const data = await claudeApiRequest('/api/auth/oauth/token', {
+        grant_type: 'refresh_token',
+        refresh_token: refreshToken,
+      }, {
+        maxRetries: 5,
+        retryDelay: 5000, // 5秒間隔でリトライ
+        timeout: 90000,   // 90秒タイムアウト
       });
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error('❌ トークンリフレッシュに失敗:', response.status, errorText);
-        return {
-          success: false,
-          error: `HTTP ${response.status}: ${errorText}`,
-        };
-      }
-
-            const data = await response.json() as any;
 
       if (!data.access_token || !data.refresh_token) {
         console.error('❌ 無効なレスポンス形式:', Object.keys(data));
@@ -94,6 +81,14 @@ export class OAuthTokenRefresher {
       };
     } catch (error) {
       console.error('❌ トークンリフレッシュでエラーが発生:', error);
+
+      if (error instanceof CloudflareBlockError) {
+        return {
+          success: false,
+          error: 'Cloudflare protection triggered - please try again later',
+        };
+      }
+
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Unknown error',
@@ -220,18 +215,18 @@ export class OAuthTokenRefresher {
 
       // トークンリフレッシュ
       const refreshResult = await this.refreshClaudeToken(currentTokens.refresh_token);
-      if (!refreshResult.success) {
+      if (!refreshResult.success || !refreshResult.access_token || !refreshResult.refresh_token || !refreshResult.expires_at) {
         return {
           success: false,
           refreshed: false,
-          error: `Token refresh failed: ${refreshResult.error}`,
+          error: `Token refresh failed: ${refreshResult.error || 'Missing required token fields'}`,
         };
       }
 
       const newTokens: ClaudeTokens = {
-        access_token: refreshResult.access_token!,
-        refresh_token: refreshResult.refresh_token!,
-        expires_at: refreshResult.expires_at!,
+        access_token: refreshResult.access_token,
+        refresh_token: refreshResult.refresh_token,
+        expires_at: refreshResult.expires_at,
       };
 
       // GitHub Secretsを更新
@@ -290,7 +285,18 @@ export async function executeScheduledRefresh(): Promise<void> {
       process.exit(1);
     }
 
-    const [owner, repo] = repository.split('/');
+    const repoSplit = repository.split('/');
+    if (repoSplit.length !== 2) {
+      console.error('❌ GITHUB_REPOSITORY形式が無効です:', repository);
+      process.exit(1);
+    }
+
+    const [owner, repo] = repoSplit;
+    if (!owner || !repo) {
+      console.error('❌ owner/repo情報が取得できません:', repoSplit);
+      process.exit(1);
+    }
+
     const currentTokens = getTokensFromEnvironment();
 
     if (!currentTokens) {
@@ -307,11 +313,11 @@ export async function executeScheduledRefresh(): Promise<void> {
       process.exit(1);
     }
 
-          if (result.refreshed) {
-        console.log('✅ スケジュールされたトークンリフレッシュが完了しました');
-        // セキュリティ: トークンをログに出力しない
-        // 代わりに GitHub Secrets として安全に保存済み
-      }
+    if (result.refreshed) {
+      console.log('✅ スケジュールされたトークンリフレッシュが完了しました');
+      // セキュリティ: トークンをログに出力しない
+      // 代わりに GitHub Secrets として安全に保存済み
+    }
   } catch (error) {
     console.error('❌ 予期しないエラー:', error);
     process.exit(1);
@@ -331,7 +337,18 @@ export async function executeAutoRefresh(): Promise<void> {
       process.exit(1);
     }
 
-    const [owner, repo] = repository.split('/');
+    const repoSplit = repository.split('/');
+    if (repoSplit.length !== 2) {
+      console.error('❌ GITHUB_REPOSITORY形式が無効です:', repository);
+      process.exit(1);
+    }
+
+    const [owner, repo] = repoSplit;
+    if (!owner || !repo) {
+      console.error('❌ owner/repo情報が取得できません:', repoSplit);
+      process.exit(1);
+    }
+
     const currentTokens = getTokensFromEnvironment();
 
     if (!currentTokens) {

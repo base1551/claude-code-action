@@ -52,6 +52,13 @@ jobs:
           echo "実行理由: ${{ github.event_name }}"
           echo "リポジトリ: ${{ github.repository }}"
 
+      - name: Debug OAuth Secrets
+        run: |
+          echo "🔍 OAuth Secrets 確認:"
+          echo "CLAUDE_ACCESS_TOKEN: ${{ secrets.CLAUDE_ACCESS_TOKEN != '' && 'SET' || 'NOT_SET' }}"
+          echo "CLAUDE_REFRESH_TOKEN: ${{ secrets.CLAUDE_REFRESH_TOKEN != '' && 'SET' || 'NOT_SET' }}"
+          echo "CLAUDE_EXPIRES_AT: ${{ secrets.CLAUDE_EXPIRES_AT != '' && 'SET' || 'NOT_SET' }}"
+
       - name: OAuth Token Scheduled Refresh
         id: refresh-token
         uses: base1551/claude-code-action@main
@@ -63,6 +70,11 @@ jobs:
           claude_access_token: ${{ secrets.CLAUDE_ACCESS_TOKEN }}
           claude_refresh_token: ${{ secrets.CLAUDE_REFRESH_TOKEN }}
           claude_expires_at: ${{ secrets.CLAUDE_EXPIRES_AT }}
+        env:
+          # base1551/claude-code-actionが期待する環境変数形式
+          CLAUDE_ACCESS_TOKEN: ${{ secrets.CLAUDE_ACCESS_TOKEN }}
+          CLAUDE_REFRESH_TOKEN: ${{ secrets.CLAUDE_REFRESH_TOKEN }}
+          CLAUDE_EXPIRES_AT: ${{ secrets.CLAUDE_EXPIRES_AT }}
 
       - name: Verify Scheduled Refresh
         if: steps.refresh-token.conclusion == 'success'
