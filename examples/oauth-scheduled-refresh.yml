@@ -1,28 +1,48 @@
 name: "Claude OAuth Token Scheduled Refresh"
 
-# 指定時間にClaude OAuthトークンを無条件で強制リフレッシュ
+# repository_dispatchイベントを使用（base1551/claude-code-actionが対応）
 on:
-  schedule:
-    # 10分ごとに実行（期限切れに関係なく強制更新）
-    - cron: '*/10 * * * *'  # 10分ごと
+  repository_dispatch:
+    types: [oauth-refresh]
 
-  # 手動実行も可能
+  # 手動実行（テスト用）
   workflow_dispatch:
+    inputs:
+      force_refresh:
+        description: 'Force OAuth token refresh'
+        required: false
+        default: 'true'
 
 # セキュリティ：必要最小限の権限のみ付与
 permissions:
   contents: read
-  # セキュリティ強化: secrets の write 権限のみに限定
-  secrets: write
-  # actions: write は削除（不要なワークフロー改ざんリスクを回避）
+  id-token: write  # OIDC token取得に必要
+  issues: write    # issue作成に必要
+  # 注意: secrets権限は存在しません
+  # secretsの更新は GITHUB_TOKEN を使用してREST APIで実行
 
 jobs:
+  # 定期実行用のトリガーissue作成
+  create-trigger:
+    if: github.event_name == 'repository_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create OAuth Refresh Trigger Issue
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const issue = await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: '[AUTO] OAuth Token Refresh Trigger',
+              body: '@claude __SCHEDULED_OAUTH_REFRESH__'
+            });
+            console.log(`Created trigger issue #${issue.data.number}`);
+
   scheduled-refresh:
     name: "Scheduled Token Refresh"
     runs-on: ubuntu-latest
-
-    # OAuth認証が設定されている場合のみ実行
-    if: vars.CLAUDE_OAUTH_ENABLED == 'true' || secrets.CLAUDE_REFRESH_TOKEN != ''
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'repository_dispatch'
 
     steps:
       - name: Security Check
@@ -34,11 +54,12 @@ jobs:
 
       - name: OAuth Token Scheduled Refresh
         id: refresh-token
-        uses: Akira-Papa/claude-code-action-Akira-Papa@main
+        uses: base1551/claude-code-action@main
         with:
           # OAuth自動リフレッシュ専用のトリガー
           direct_prompt: "__SCHEDULED_OAUTH_REFRESH__"
           use_oauth: "true"
+          github_token: ${{ secrets.GITHUB_TOKEN }}
           claude_access_token: ${{ secrets.CLAUDE_ACCESS_TOKEN }}
           claude_refresh_token: ${{ secrets.CLAUDE_REFRESH_TOKEN }}
           claude_expires_at: ${{ secrets.CLAUDE_EXPIRES_AT }}
@@ -47,7 +68,7 @@ jobs:
         if: steps.refresh-token.conclusion == 'success'
         run: |
           echo "✅ スケジュールされたトークンリフレッシュが完了しました"
-          echo "次回の更新: ${{ github.event.schedule && fromJSON('[\"明日の同時刻\", \"手動実行\"]')[0] || \"手動実行\" }}"
+          echo "次回の更新: repository_dispatch で手動実行"
           echo "🔐 新しいトークンはGitHub Secretsに安全に保存されました"
 
       - name: Handle Refresh Failure

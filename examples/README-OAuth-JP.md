@@ -36,8 +36,8 @@
 # .github/workflows/claude-oauth-refresh.yml
 permissions:
   contents: read      # 最小権限
-  secrets: write      # Secrets更新のみ
-  # actions: write は付与しない（セキュリティリスク）
+  # 注意: secrets権限は存在しません
+  # secretsの更新はGITHUB_TOKENを使用してREST APIで実行
 
 # 実行条件を制限
 if: |
@@ -86,7 +86,7 @@ on:
 # セキュリティ：必要最小限の権限
 permissions:
   contents: read
-  secrets: write
+  # secretsの更新はGITHUB_TOKENのREST API使用
 
 jobs:
   scheduled-refresh:

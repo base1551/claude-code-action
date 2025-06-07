@@ -26,12 +26,20 @@ import { AuditLogger, DEFAULT_SECURITY_CONFIG } from "../oauth/security-utils";
  */
 async function performOAuthRefreshIfNeeded(githubToken: string, auditLogger: AuditLogger, forceRefresh: boolean = false): Promise<void> {
   try {
+    // デバッグ: 環境変数の存在確認
+    console.log('🔍 OAuth設定チェック:');
+    console.log(`  CLAUDE_ACCESS_TOKEN: ${process.env.CLAUDE_ACCESS_TOKEN ? '設定済み' : '未設定'}`);
+    console.log(`  CLAUDE_REFRESH_TOKEN: ${process.env.CLAUDE_REFRESH_TOKEN ? '設定済み' : '未設定'}`);
+    console.log(`  CLAUDE_EXPIRES_AT: ${process.env.CLAUDE_EXPIRES_AT ? '設定済み' : '未設定'}`);
+
     const currentTokens = getTokensFromEnvironment();
 
     if (!currentTokens) {
       console.log('ℹ️ OAuth トークンが設定されていません。API Key認証を使用します。');
       return;
     }
+
+    console.log('✅ OAuth トークンが検出されました');
 
     const repository = process.env.GITHUB_REPOSITORY;
     if (!repository) {
@@ -135,6 +143,10 @@ async function run() {
       console.log("🔄 スケジュールされたOAuthリフレッシュを実行中...");
       await performOAuthRefreshIfNeeded(githubToken, auditLogger, true);
       console.log("✅ スケジュールされたOAuthリフレッシュが完了しました");
+
+      // スケジュール実行の場合は contains_trigger を false に設定して終了
+      core.setOutput("contains_trigger", "false");
+      core.setOutput("GITHUB_TOKEN", githubToken || "");
       return;
     }
 

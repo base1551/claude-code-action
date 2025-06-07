@@ -7,6 +7,23 @@ import type {
   PullRequestReviewCommentEvent,
 } from "@octokit/webhooks-types";
 
+// workflow_dispatch用の型定義
+export type WorkflowDispatchEvent = {
+  action?: never;
+  inputs?: Record<string, string>;
+  ref: string;
+  repository: {
+    id: number;
+    name: string;
+    full_name: string;
+    owner: {
+      login: string;
+      id: number;
+    };
+  };
+  workflow: string;
+};
+
 export type ParsedGitHubContext = {
   runId: string;
   eventName: string;
@@ -22,7 +39,8 @@ export type ParsedGitHubContext = {
     | IssueCommentEvent
     | PullRequestEvent
     | PullRequestReviewEvent
-    | PullRequestReviewCommentEvent;
+    | PullRequestReviewCommentEvent
+    | WorkflowDispatchEvent;
   entityNumber: number;
   isPR: boolean;
   inputs: {
@@ -101,6 +119,22 @@ export function parseGitHubContext(): ParsedGitHubContext {
         entityNumber: (context.payload as PullRequestReviewCommentEvent)
           .pull_request.number,
         isPR: true,
+      };
+    }
+    case "workflow_dispatch": {
+      return {
+        ...commonFields,
+        payload: context.payload as WorkflowDispatchEvent,
+        entityNumber: 0, // workflow_dispatch には issue/PR 番号がない
+        isPR: false,
+      };
+    }
+    case "schedule": {
+      return {
+        ...commonFields,
+        payload: {} as WorkflowDispatchEvent, // schedule イベントも対応
+        entityNumber: 0,
+        isPR: false,
       };
     }
     default:
